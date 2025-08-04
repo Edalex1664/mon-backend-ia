@@ -1,20 +1,15 @@
 // /api/replicate-style.js
+import Replicate from "replicate";
+
 export const config = {
-  api: {
-    bodyParser: {
-      sizeLimit: "10mb", // pour accepter un base64 d'image raisonnable
-    },
-  },
+  api: { bodyParser: { sizeLimit: "15mb" } },
 };
 
-function setCors(res) {
-  res.setHeader("Access-Control-Allow-Origin", "*"); // ou restreins à ton domaine Framer
+export default async function handler(req, res) {
+  // CORS pour Framer
+  res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
-}
-
-export default async function handler(req, res) {
-  setCors(res);
 
   if (req.method === "OPTIONS") {
     return res.status(200).end();
@@ -23,79 +18,46 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: "Method Not Allowed" });
   }
 
-  // Import "replicate" en dynamique pour capturer l'erreur si le package n'est pas installé
-  let Replicate;
-  try {
-    ({ default: Replicate } = await import("replicate"));
-  } catch (e) {
-    console.error("Import replicate failed:", e);
-    return res.status(500).json({
-      error: "Replicate SDK introuvable. Assure-toi que 'replicate' est en dependencies et redeploy.",
-    });
-  }
-
   try {
     const { imageDataUrl, style } = req.body || {};
-
     if (!imageDataUrl || !style) {
       return res
         .status(400)
         .json({ error: "Champs requis manquants: imageDataUrl et style" });
     }
+    if (!/^data:image\/(png|jpe?g);base64,/.test(imageDataUrl)) {
+      return res
+        .status(400)
+        .json({ error: "imageDataUrl doit être un Data URL base64 (png/jpg)" });
+    }
 
-    // Instancie le client Replicate
     const replicate = new Replicate({
       auth: process.env.REPLICATE_API_TOKEN,
     });
 
-    // ⚠️ Beaucoup de modèles Replicate attendent une URL http(s), pas une data URL.
-    // Le SDK récent expose un "files.upload" qui prend un Buffer ou un Blob et renvoie une URL temporaire.
-    // On convertit la data URL en Buffer et on l’upload via le SDK, puis on passe l’URL au modèle.
+    // Modèle : instruct-pix2pix (édition d'image guidée par prompt)
+    const prompt = `apply a ${style} style, t-shirt graphic, high quality, clean edges`;
+    const input = {
+      image: imageDataUrl,          // ✅ on passe directement le Data URL
+      prompt,
+      num_inference_steps: 40,
+      guidance_scale: 7,
+      image_guidance_scale: 1.6,
+    };
 
-    // Convert dataURL -> Buffer
-    const matches = imageDataUrl.match(/^data:(.+?);base64,(.+)$/);
-    if (!matches) {
-      return res.status(400).json({ error: "imageDataUrl invalide" });
-    }
-    const base64 = matches[2];
-    const buffer = Buffer.from(base64, "base64");
+    const output = await replicate.run("timbrooks/instruct-pix2pix", { input });
 
-    // Upload fichier vers Replicate Files
-    let fileUrl;
-    try {
-      // @ts-ignore (selon version SDK)
-      const uploadResp = await replicate.files.upload(buffer, {
-        filename: "upload.png",
-        contentType: "image/png",
-      });
-      fileUrl = uploadResp?.url;
-    } catch (e) {
-      console.error("Upload vers Replicate Files a échoué:", e);
-      return res.status(500).json({ error: "Upload image vers Replicate échoué" });
-    }
+    // La sortie est généralement un tableau d'URLs d'images
+    const outputUrl =
+      Array.isArray(output) && output.length ? output[0] : null;
 
-    if (!fileUrl) {
-      return res.status(500).json({ error: "URL de fichier manquante après upload" });
-    }
-
-    // Appel du modèle (remplace par le modèle que tu utilises vraiment)
-    // Ex: "fofr/style-transfer" (vérifie la doc du modèle pour les clés d'input exactes)
-    const output = await replicate.run("fofr/style-transfer", {
-      input: {
-        image: fileUrl,
-        prompt: `Apply ${style} style`,
-      },
-    });
-
-    // Certains modèles renvoient un tableau d’URLs, d’autres une unique URL
-    const outputUrl = Array.isArray(output) ? output[0] : output;
     if (!outputUrl) {
-      return res.status(500).json({ error: "Pas de résultat retourné par l'IA" });
+      return res.status(502).json({ error: "Aucune image retournée par l'IA" });
     }
 
     return res.status(200).json({ output_url: outputUrl });
   } catch (err) {
-    console.error("Erreur backend:", err);
+    console.error("Erreur backend /replicate-style:", err);
     return res.status(500).json({ error: "Erreur IA (backend)" });
   }
 }

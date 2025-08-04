@@ -1,5 +1,12 @@
-"type": "module",
-"dependencies": {
-  "formidable": "^3.5.0",
-  "replicate": "^0.19.1"
+{
+  "name": "mon-backend-ia",
+  "version": "1.0.0",
+  "type": "module",
+  "dependencies": {
+    "replicate": "^0.19.1",
+    "formidable": "^3.5.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
 }
